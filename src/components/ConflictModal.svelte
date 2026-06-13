@@ -1,27 +1,72 @@
 <script lang="ts">
-  import type { ConflictInfo, CourseDraft } from '../types';
+  import type { ConflictInfo, CourseDraft, TimeSlotSuggestion } from '../types';
   import { saveCourse } from '../lib/stores';
 
   export let conflicts: ConflictInfo[];
   export let draft: CourseDraft | null;
   export let onClose: () => void;
-  export let onApplySuggestion: (suggestion: ConflictInfo['suggestion']) => void;
 
-  async function handleApplyFirstSuggestion() {
-    const suggestion = conflicts.find((c) => c.suggestion)?.suggestion;
-    if (suggestion && draft) {
-      const newDraft: CourseDraft = {
-        ...draft,
-        date: suggestion.date || draft.date,
-        startTime: suggestion.startTime || draft.startTime,
-        lane: suggestion.lane || draft.lane,
-      };
-      const saved = await saveCourse(newDraft);
-      if (saved) {
-        onClose();
-      }
+  async function applyTimeSlot(slot: TimeSlotSuggestion) {
+    if (!draft) return;
+    const newDraft: CourseDraft = {
+      ...draft,
+      date: slot.date,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+    };
+    const saved = await saveCourse(newDraft);
+    if (saved) {
+      onClose();
     }
   }
+
+  async function applyCoach(coachId: string, coachName: string) {
+    if (!draft) return;
+    const newDraft: CourseDraft = {
+      ...draft,
+      coachId,
+    };
+    const saved = await saveCourse(newDraft);
+    if (saved) {
+      onClose();
+    }
+  }
+
+  async function applyLane(lane: number) {
+    if (!draft) return;
+    const newDraft: CourseDraft = {
+      ...draft,
+      lane,
+    };
+    const saved = await saveCourse(newDraft);
+    if (saved) {
+      onClose();
+    }
+  }
+
+  function getTypeLabel(type: string): string {
+    switch (type) {
+      case 'coach': return '教练冲突';
+      case 'lane': return '泳道冲突';
+      case 'student': return '学员冲突';
+      default: return '冲突';
+    }
+  }
+
+  function getTypeIcon(type: string): string {
+    switch (type) {
+      case 'coach':
+        return '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>';
+      case 'lane':
+        return '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="2" y1="8" x2="22" y2="8"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="16" x2="22" y2="16"/>';
+      default:
+        return '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>';
+    }
+  }
+
+  const allSuggestedTimeSlots = conflicts.flatMap((c) => c.suggestedTimeSlots || []).slice(0, 3);
+  const allSuggestedCoaches = conflicts.flatMap((c) => c.suggestedCoaches || []).slice(0, 3);
+  const allSuggestedLanes = conflicts.flatMap((c) => c.suggestedLanes || []).slice(0, 3);
 </script>
 
 {#if conflicts.length > 0}
@@ -35,7 +80,7 @@
             <line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
         </div>
-        <h3>排课冲突</h3>
+        <h3>排课冲突检测</h3>
         <button class="close-btn" on:click={onClose}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -44,58 +89,125 @@
       </div>
 
       <div class="modal-body">
-        <p class="intro">检测到以下冲突，无法完成排课：</p>
-        <ul class="conflict-list">
+        <p class="intro">检测到 <strong>{conflicts.length}</strong> 个排课冲突，无法完成保存：</p>
+
+        <div class="conflict-list">
           {#each conflicts as conflict}
-            <li class="conflict-item {conflict.type}">
-              <div class="conflict-type">
-                {#if conflict.type === 'coach'}
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  教练冲突
-                {:else if conflict.type === 'lane'}
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="2" y1="8" x2="22" y2="8"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="16" x2="22" y2="16"/></svg>
-                  泳道冲突
-                {:else}
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  学员冲突
-                {/if}
+            <div class="conflict-item {conflict.type}">
+              <div class="conflict-header">
+                <div class="conflict-type">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    {@html getTypeIcon(conflict.type)}
+                  </svg>
+                  {getTypeLabel(conflict.type)}
+                </div>
               </div>
               <div class="conflict-message">{conflict.message}</div>
-              {#if conflict.suggestion}
-                <div class="suggestion">
-                  <div class="suggestion-label">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-                    建议
-                  </div>
-                  <div class="suggestion-text">
-                    {#if conflict.suggestion.startTime}
-                      改到 {conflict.suggestion.startTime}
-                    {/if}
-                    {#if conflict.suggestion.lane}
-                      改用第 {conflict.suggestion.lane} 泳道
-                    {/if}
-                  </div>
-                  <button
-                    class="apply-suggestion-btn"
-                    on:click={() => onApplySuggestion(conflict.suggestion)}
-                  >
-                    应用建议
-                  </button>
-                </div>
-              {/if}
-            </li>
+            </div>
           {/each}
-        </ul>
+        </div>
+
+        <div class="suggestions-section">
+          <div class="suggestions-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            智能调整建议
+          </div>
+
+          {#if allSuggestedTimeSlots.length > 0}
+            <div class="suggestion-group">
+              <div class="suggestion-group-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                推荐空闲时间段
+              </div>
+              <div class="suggestion-options">
+                {#each allSuggestedTimeSlots as slot}
+                  <button class="suggestion-btn time-slot" on:click={() => applyTimeSlot(slot)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="9 10 12 13 22 3"/>
+                    </svg>
+                    <span>{slot.startTime} - {slot.endTime}</span>
+                    <span class="apply-label">点击应用</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if allSuggestedCoaches.length > 0}
+            <div class="suggestion-group">
+              <div class="suggestion-group-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                  <circle cx="12" cy="7" r="4"/>
+                </svg>
+                可选替代教练
+              </div>
+              <div class="suggestion-options">
+                {#each allSuggestedCoaches as coach}
+                  <button
+                    class="suggestion-btn coach"
+                    style="--coach-color: {coach.color};"
+                    on:click={() => applyCoach(coach.id, coach.name)}
+                  >
+                    <span class="coach-dot"></span>
+                    <span>{coach.name}</span>
+                    <span class="apply-label">点击应用</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if allSuggestedLanes.length > 0}
+            <div class="suggestion-group">
+              <div class="suggestion-group-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2"/>
+                  <line x1="2" y1="8" x2="22" y2="8"/>
+                  <line x1="2" y1="12" x2="22" y2="12"/>
+                  <line x1="2" y1="16" x2="22" y2="16"/>
+                </svg>
+                建议可用泳道
+              </div>
+              <div class="suggestion-options">
+                {#each allSuggestedLanes as lane}
+                  <button class="suggestion-btn lane" on:click={() => applyLane(lane)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="9 10 12 13 22 3"/>
+                    </svg>
+                    <span>第 {lane} 泳道</span>
+                    <span class="apply-label">点击应用</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if allSuggestedTimeSlots.length === 0 && allSuggestedCoaches.length === 0 && allSuggestedLanes.length === 0}
+            <div class="no-suggestions">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <p>暂无可用的调整建议</p>
+              <p class="hint">请尝试修改课程时间、更换教练或选择其他日期</p>
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-ghost" on:click={onClose}>我知道了</button>
-        {#if conflicts.some((c) => c.suggestion)}
-          <button class="btn btn-primary" on:click={handleApplyFirstSuggestion}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            应用第一个建议
-          </button>
-        {/if}
+        <button class="btn btn-ghost" on:click={onClose}>
+          返回修改
+        </button>
       </div>
     </div>
   </div>
@@ -117,9 +229,9 @@
   .modal {
     background: var(--surface-0);
     border-radius: var(--radius-xl);
-    width: 480px;
-    max-width: 90vw;
-    max-height: 80vh;
+    width: 560px;
+    max-width: 95vw;
+    max-height: 90vh;
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-xl);
@@ -187,13 +299,16 @@
     font-size: 14px;
   }
 
+  .intro strong {
+    color: var(--coral-500);
+    font-weight: 700;
+  }
+
   .conflict-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
+    margin-bottom: 20px;
   }
 
   .conflict-item {
@@ -220,10 +335,13 @@
     border-color: var(--ocean-400);
   }
 
+  .conflict-header {
+    margin-bottom: 6px;
+  }
+
   .conflict-type {
     font-weight: 600;
     font-size: 13px;
-    margin-bottom: 6px;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -248,49 +366,120 @@
     line-height: 1.6;
   }
 
-  .suggestion {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px dashed var(--surface-200);
+  .suggestions-section {
+    background: var(--teal-50);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    border: 1px solid var(--teal-100);
+  }
+
+  .suggestions-title {
     display: flex;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--teal-700);
+    margin-bottom: 14px;
+    font-family: var(--font-display);
   }
 
-  .suggestion-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--teal-500);
+  .suggestion-group {
+    margin-bottom: 14px;
+  }
+
+  .suggestion-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .suggestion-group-title {
     display: flex;
     align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-  }
-
-  .suggestion-text {
-    font-size: 13px;
-    color: var(--text-secondary);
-    flex: 1;
-  }
-
-  .apply-suggestion-btn {
-    padding: 5px 14px;
-    background: var(--teal-500);
-    color: white;
-    border: none;
-    border-radius: var(--radius-sm);
+    gap: 6px;
     font-size: 12px;
     font-weight: 600;
-    font-family: var(--font-body);
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .suggestion-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .suggestion-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--surface-0);
+    border: 1.5px solid var(--surface-200);
+    border-radius: var(--radius-md);
     cursor: pointer;
-    transition: background 0.15s, box-shadow 0.15s;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-family: var(--font-body);
+    transition: all 0.2s var(--ease-out);
+    min-width: 140px;
+  }
+
+  .suggestion-btn:hover {
+    border-color: var(--teal-400);
+    background: var(--teal-50);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .suggestion-btn svg {
+    color: var(--teal-500);
     flex-shrink: 0;
   }
 
-  .apply-suggestion-btn:hover {
-    background: var(--teal-600);
-    box-shadow: var(--shadow-glow-teal);
+  .suggestion-btn.coach .coach-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--coach-color);
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+  }
+
+  .apply-label {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--teal-500);
+    font-weight: 600;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .suggestion-btn:hover .apply-label {
+    opacity: 1;
+  }
+
+  .no-suggestions {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-muted);
+  }
+
+  .no-suggestions svg {
+    margin-bottom: 8px;
+    opacity: 0.5;
+  }
+
+  .no-suggestions p {
+    margin: 4px 0;
+    font-size: 13px;
+  }
+
+  .no-suggestions .hint {
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   .modal-footer {

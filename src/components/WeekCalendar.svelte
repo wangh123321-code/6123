@@ -1,7 +1,7 @@
 <script lang="ts">
   import { get } from 'svelte/store';
   import type { Course, Coach, ConflictInfo, CourseDraft } from '../types';
-  import { LANE_COUNT, DAY_START_HOUR, DAY_END_HOUR, TIME_SLOT_MINUTES } from '../types';
+  import { LANE_COUNT, DAY_START_HOUR, DAY_END_HOUR, TIME_SLOT_MINUTES, BUFFER_MINUTES } from '../types';
   import {
     getWeekDateStrings,
     getTimeSlots,
@@ -9,6 +9,8 @@
     isToday,
     timeToMinutes,
     calculateDurationMinutes,
+    quickCheckConflict,
+    snapTimeToSlot,
   } from '../lib/utils';
   import {
     selectedDate,
@@ -17,6 +19,7 @@
     saveCourse,
     currentUser,
     hasPermission,
+    visibleCourses,
   } from '../lib/stores';
 
   export let courses: Course[];
@@ -24,8 +27,10 @@
   export let onConflict: (conflicts: ConflictInfo[], draft: CourseDraft) => void;
   export let onEditCourse: (course: Course) => void;
   export let onCreateCourse: (draft: CourseDraft | null) => void;
+  export let onBatchSchedule: () => void;
 
   export let hoverCell: { date: string; time: string; lane: number } | null = null;
+  export let dragConflict: { hasConflict: boolean; reason: string } | null = null;
 
   $: weekDates = getWeekDateStrings($selectedDate);
   $: timeSlots = getTimeSlots();
@@ -67,6 +72,9 @@
     return { dayIdx, topPx, heightPx };
   }
 
+  let draggingPayload: any = null;
+  let draggingCourse: Course | null = null;
+
   function cellFromEvent(event: DragEvent): { date: string; time: string; lane: number } | null {
     const target = event.target as HTMLElement;
     const cell = target.closest('.time-cell') as HTMLElement | null;
@@ -78,25 +86,52 @@
     return { date, time, lane };
   }
 
+  function checkDragConflict(
+    cell: { date: string; time: string; lane: number },
+    payload: any
+  ): { hasConflict: boolean; reason: string } {
+    const endMinutes = timeToMinutes(cell.time) + (draggingCourse ? calculateDurationMinutes(draggingCourse.startTime, draggingCourse.endTime) : 60);
+    const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+
+    const draft: CourseDraft = {
+      title: payload.type === 'course' ? draggingCourse?.title || '课程' : '临时课程',
+      level: payload.type === 'course' ? draggingCourse?.level || 'breaststroke_beginner' : 'breaststroke_beginner',
+      branchId: get(selectedBranchId),
+      coachId: payload.type === 'coach' ? payload.coachId : (payload.type === 'course' ? draggingCourse?.coachId || '' : ''),
+      lane: cell.lane,
+      startTime: snapTimeToSlot(cell.time),
+      endTime: snapTimeToSlot(endTime),
+      date: cell.date,
+      studentIds: payload.type === 'course' ? draggingCourse?.studentIds || [] : [],
+      id: payload.type === 'course' ? payload.courseId : undefined,
+    };
+
+    return quickCheckConflict(draft, get(visibleCourses));
+  }
+
   function handleDragOver(event: DragEvent) {
     event.preventDefault();
     if (!hasPermission(get(currentUser)!.role, 'create_course')) return;
     const cell = cellFromEvent(event);
-    if (cell) {
+    if (cell && draggingPayload) {
       hoverCell = cell;
+      const conflict = checkDragConflict(cell, draggingPayload);
+      dragConflict = conflict;
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'copy';
+        event.dataTransfer.dropEffect = conflict.hasConflict ? 'none' : 'copy';
       }
     }
   }
 
   function handleDragLeave() {
     hoverCell = null;
+    dragConflict = null;
   }
 
   async function handleDrop(event: DragEvent) {
     event.preventDefault();
     hoverCell = null;
+    dragConflict = null;
     if (!hasPermission(get(currentUser)!.role, 'create_course')) return;
 
     const cell = cellFromEvent(event);
@@ -106,12 +141,17 @@
     try {
       payload = JSON.parse(event.dataTransfer.getData('application/json'));
     } catch {
+      draggingPayload = null;
+      draggingCourse = null;
       return;
     }
 
     if (payload.type === 'coach') {
       const coach = coaches.find((c) => c.id === payload.coachId);
-      if (!coach) return;
+      if (!coach) {
+        draggingPayload = null;
+        return;
+      }
 
       const endMinutes = timeToMinutes(cell.time) + 60;
       const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
@@ -122,8 +162,8 @@
         branchId: get(selectedBranchId),
         coachId: coach.id,
         lane: cell.lane,
-        startTime: cell.time,
-        endTime,
+        startTime: snapTimeToSlot(cell.time),
+        endTime: snapTimeToSlot(endTime),
         date: cell.date,
         studentIds: [],
         skillPointsCovered: [],
@@ -132,6 +172,7 @@
       const conflicts = checkCourseConflicts(draft);
       if (conflicts.length > 0) {
         onConflict(conflicts, draft);
+        draggingPayload = null;
         return;
       }
 
@@ -141,24 +182,38 @@
       }
     } else if (payload.type === 'course') {
       const existingCourse = courses.find((c) => c.id === payload.courseId);
-      if (!existingCourse) return;
+      if (!existingCourse) {
+        draggingPayload = null;
+        draggingCourse = null;
+        return;
+      }
+
+      const duration = calculateDurationMinutes(existingCourse.startTime, existingCourse.endTime);
+      const endMinutes = timeToMinutes(cell.time) + duration;
+      const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
 
       const draft: CourseDraft = {
         ...existingCourse,
         id: existingCourse.id,
         lane: cell.lane,
-        startTime: cell.time,
+        startTime: snapTimeToSlot(cell.time),
+        endTime: snapTimeToSlot(endTime),
         date: cell.date,
       };
 
       const conflicts = checkCourseConflicts(draft);
       if (conflicts.length > 0) {
         onConflict(conflicts, draft);
+        draggingPayload = null;
+        draggingCourse = null;
         return;
       }
 
       await saveCourse(draft);
     }
+
+    draggingPayload = null;
+    draggingCourse = null;
   }
 
   function handleCourseDragStart(event: DragEvent, course: Course) {
@@ -167,6 +222,8 @@
       return;
     }
     event.stopPropagation();
+    draggingCourse = course;
+    draggingPayload = { type: 'course', courseId: course.id };
     if (event.dataTransfer) {
       event.dataTransfer.setData(
         'application/json',
@@ -174,6 +231,18 @@
       );
       event.dataTransfer.effectAllowed = 'move';
     }
+  }
+
+  function handleCoachDragStart(event: DragEvent, coachId: string) {
+    draggingPayload = { type: 'coach', coachId };
+    draggingCourse = null;
+  }
+
+  function handleDragEnd() {
+    hoverCell = null;
+    dragConflict = null;
+    draggingPayload = null;
+    draggingCourse = null;
   }
 
   function handleCourseClick(course: Course) {
@@ -197,7 +266,7 @@
   }
 </script>
 
-<div class="week-calendar" role="grid" on:dragover={handleDragOver} on:dragleave={handleDragLeave} on:drop={handleDrop}>
+<div class="week-calendar" role="grid" on:dragover={handleDragOver} on:dragleave={handleDragLeave} on:drop={handleDrop} on:dragend={handleDragEnd}>
   <div class="calendar-header">
     <div class="nav-controls">
       <button class="nav-btn" on:click={prevWeek} aria-label="上一周">
@@ -210,12 +279,34 @@
       <span class="week-range">{weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}</span>
     </div>
     {#if hasPermission($currentUser!.role, 'create_course')}
-      <button class="add-course-btn" on:click={openNewCourseModal}>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-        新建课程
-      </button>
+      <div class="header-buttons">
+        <button class="add-course-btn secondary" on:click={onBatchSchedule}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="12" height="10" rx="1"/>
+            <line x1="2" y1="7" x2="14" y2="7"/>
+            <line x1="6" y1="3" x2="6" y2="13"/>
+            <line x1="10" y1="3" x2="10" y2="13"/>
+          </svg>
+          批量排课
+        </button>
+        <button class="add-course-btn" on:click={openNewCourseModal}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+          新建课程
+        </button>
+      </div>
     {/if}
   </div>
+
+  {#if dragConflict && dragConflict.hasConflict}
+    <div class="conflict-tooltip">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/>
+        <line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <span>无法放置：{dragConflict.reason}</span>
+    </div>
+  {/if}
 
   <div class="calendar-body">
     <div class="scroll-wrapper">
@@ -249,7 +340,7 @@
                 <div class="slot-row" role="row">
                   {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
                     <div
-                      class="time-cell {hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane ? 'hovered' : ''}"
+                      class="time-cell {hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane ? (dragConflict?.hasConflict ? 'hovered-forbidden' : 'hovered') : ''}"
                       role="gridcell"
                       data-date={date}
                       data-time={time}
@@ -258,6 +349,14 @@
                     >
                       {#if hasPermission($currentUser!.role, 'create_course')}
                         <div class="cell-plus">+</div>
+                      {/if}
+                      {#if hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane && dragConflict?.hasConflict}
+                        <div class="forbidden-icon">
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                          </svg>
+                        </div>
                       {/if}
                     </div>
                   {/each}
@@ -368,6 +467,11 @@
     letter-spacing: 0.02em;
   }
 
+  .header-buttons {
+    display: flex;
+    gap: 10px;
+  }
+
   .add-course-btn {
     display: flex;
     align-items: center;
@@ -394,6 +498,45 @@
 
   .add-course-btn:active {
     transform: translateY(0);
+  }
+
+  .add-course-btn.secondary {
+    background: linear-gradient(135deg, var(--ocean-500), var(--ocean-600));
+    box-shadow: 0 3px 10px rgba(59, 130, 246, 0.3), 0 1px 2px rgba(59, 130, 246, 0.2);
+  }
+
+  .add-course-btn.secondary:hover {
+    box-shadow: 0 6px 18px rgba(59, 130, 246, 0.4), 0 2px 4px rgba(59, 130, 246, 0.25);
+  }
+
+  .conflict-tooltip {
+    position: absolute;
+    top: 72px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--coral-500);
+    color: white;
+    padding: 10px 18px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: var(--shadow-lg);
+    z-index: 100;
+    animation: fade-in 0.2s var(--ease-out);
+  }
+
+  .conflict-tooltip::after {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 12px;
+    height: 12px;
+    background: var(--coral-500);
   }
 
   .calendar-body {
@@ -627,9 +770,40 @@
     opacity: 0;
   }
 
+  .time-cell.hovered-forbidden {
+    background: rgba(239, 68, 68, 0.12);
+    box-shadow: inset 0 0 0 2px var(--coral-500);
+    animation: pulse-glow-red 1.2s ease-in-out infinite;
+    cursor: not-allowed;
+  }
+
+  .time-cell.hovered-forbidden .cell-plus {
+    opacity: 0;
+  }
+
+  .forbidden-icon {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--coral-500);
+    animation: forbidden-pulse 1s ease-in-out infinite;
+  }
+
   @keyframes pulse-glow {
     0%, 100% { box-shadow: inset 0 0 0 2px var(--teal-500), inset 0 0 6px rgba(0, 191, 165, 0.15); }
     50% { box-shadow: inset 0 0 0 2px var(--teal-400), inset 0 0 12px rgba(0, 191, 165, 0.3); }
+  }
+
+  @keyframes pulse-glow-red {
+    0%, 100% { box-shadow: inset 0 0 0 2px var(--coral-500), inset 0 0 6px rgba(239, 68, 68, 0.15); }
+    50% { box-shadow: inset 0 0 0 2px var(--coral-400), inset 0 0 12px rgba(239, 68, 68, 0.3); }
+  }
+
+  @keyframes forbidden-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.1); }
   }
 
   .course-block {

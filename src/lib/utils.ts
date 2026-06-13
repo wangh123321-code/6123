@@ -3,10 +3,17 @@ import {
   DAY_END_HOUR,
   TIME_SLOT_MINUTES,
   MAX_DAILY_HOURS,
+  LANE_COUNT,
+  BUFFER_MINUTES,
+  MAX_CONSECUTIVE_COURSES,
+  MAX_DAILY_STUDENT_COURSES,
   type Course,
   type ConflictInfo,
   type CoachDailyStats,
   type SkillLevel,
+  type CourseDraft,
+  type Coach,
+  type TimeSlotSuggestion,
 } from '../types';
 
 export function generateId(): string {
@@ -89,8 +96,154 @@ export function timesOverlap(
   return s1 < e2 && s2 < e1;
 }
 
+export function timesOverlapWithBuffer(
+  start1: string,
+  end1: string,
+  start2: string,
+  end2: string,
+  bufferMinutes: number = BUFFER_MINUTES
+): boolean {
+  const s1 = timeToMinutes(start1) - bufferMinutes;
+  const e1 = timeToMinutes(end1) + bufferMinutes;
+  const s2 = timeToMinutes(start2);
+  const e2 = timeToMinutes(end2);
+  return s1 < e2 && s2 < e1;
+}
+
+export function snapToTimeSlot(minutes: number): number {
+  return Math.round(minutes / TIME_SLOT_MINUTES) * TIME_SLOT_MINUTES;
+}
+
+export function snapTimeToSlot(timeStr: string): string {
+  const minutes = timeToMinutes(timeStr);
+  return minutesToTime(snapToTimeSlot(minutes));
+}
+
 export function calculateDurationMinutes(startTime: string, endTime: string): number {
   return timeToMinutes(endTime) - timeToMinutes(startTime);
+}
+
+export function getAvailableTimeSlots(
+  draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
+  allCourses: Course[],
+  coaches: Coach[],
+  count: number = 3
+): TimeSlotSuggestion[] {
+  const duration = calculateDurationMinutes(draft.startTime, draft.endTime);
+  const slots = getTimeSlots();
+  const suggestions: TimeSlotSuggestion[] = [];
+  const currentStartMinutes = timeToMinutes(draft.startTime);
+
+  const sortedSlots = [...slots].sort((a, b) => {
+    const diffA = Math.abs(timeToMinutes(a) - currentStartMinutes);
+    const diffB = Math.abs(timeToMinutes(b) - currentStartMinutes);
+    return diffA - diffB;
+  });
+
+  for (const candidateStart of sortedSlots) {
+    const candidateStartMin = timeToMinutes(candidateStart);
+    const candidateEndMin = candidateStartMin + duration;
+    if (candidateEndMin > DAY_END_HOUR * 60) continue;
+    const candidateEnd = minutesToTime(candidateEndMin);
+
+    const hasCoachConflict = allCourses.some(
+      (c) =>
+        c.id !== draft.id &&
+        c.date === draft.date &&
+        c.coachId === draft.coachId &&
+        c.status !== 'cancelled' &&
+        timesOverlapWithBuffer(candidateStart, candidateEnd, c.startTime, c.endTime)
+    );
+
+    const hasLaneConflict = allCourses.some(
+      (c) =>
+        c.id !== draft.id &&
+        c.date === draft.date &&
+        c.lane === draft.lane &&
+        c.branchId === draft.branchId &&
+        c.status !== 'cancelled' &&
+        timesOverlapWithBuffer(candidateStart, candidateEnd, c.startTime, c.endTime)
+    );
+
+    const hasStudentConflict = draft.studentIds.length > 0 && allCourses.some(
+      (c) =>
+        c.id !== draft.id &&
+        c.date === draft.date &&
+        c.status !== 'cancelled' &&
+        c.studentIds.some((s) => draft.studentIds.includes(s)) &&
+        timesOverlapWithBuffer(candidateStart, candidateEnd, c.startTime, c.endTime)
+    );
+
+    if (!hasCoachConflict && !hasLaneConflict && !hasStudentConflict) {
+      suggestions.push({
+        date: draft.date,
+        startTime: candidateStart,
+        endTime: candidateEnd,
+      });
+      if (suggestions.length >= count) break;
+    }
+  }
+
+  return suggestions;
+}
+
+export function getAvailableCoaches(
+  draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
+  allCourses: Course[],
+  coaches: Coach[],
+  count: number = 3
+): { id: string; name: string; color: string }[] {
+  const suggestions: { id: string; name: string; color: string }[] = [];
+
+  for (const coach of coaches) {
+    if (coach.id === draft.coachId) continue;
+    if (coach.branchId !== draft.branchId) continue;
+
+    const hasConflict = allCourses.some(
+      (c) =>
+        c.id !== draft.id &&
+        c.date === draft.date &&
+        c.coachId === coach.id &&
+        c.status !== 'cancelled' &&
+        timesOverlapWithBuffer(draft.startTime, draft.endTime, c.startTime, c.endTime)
+    );
+
+    if (!hasConflict) {
+      suggestions.push({ id: coach.id, name: coach.name, color: coach.color });
+      if (suggestions.length >= count) break;
+    }
+  }
+
+  return suggestions;
+}
+
+export function getAvailableLanes(
+  draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
+  allCourses: Course[],
+  count: number = 3
+): number[] {
+  const suggestions: number[] = [];
+
+  for (let lane = 1; lane <= LANE_COUNT; lane++) {
+    if (lane === draft.lane) continue;
+
+    const hasConflict = allCourses.some(
+      (c) =>
+        c.id !== draft.id &&
+        c.date === draft.date &&
+        c.lane === lane &&
+        c.branchId === draft.branchId &&
+        c.status !== 'cancelled' &&
+        timesOverlapWithBuffer(draft.startTime, draft.endTime, c.startTime, c.endTime)
+    );
+
+    if (!hasConflict) {
+      suggestions.push(lane);
+      if (suggestions.length >= count) break;
+    }
+  }
+
+  return suggestions;
 }
 
 export function getDayName(dateStr: string): string {
@@ -131,7 +284,8 @@ export function isOverloaded(stats: CoachDailyStats): boolean {
 
 export function detectConflicts(
   draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
-  allCourses: Course[]
+  allCourses: Course[],
+  coaches: Coach[] = []
 ): ConflictInfo[] {
   const conflicts: ConflictInfo[] = [];
   const otherCourses = allCourses.filter(
@@ -142,92 +296,172 @@ export function detectConflicts(
       c.status !== 'cancelled'
   );
 
+  const normalizedDraft = {
+    ...draft,
+    startTime: snapTimeToSlot(draft.startTime),
+    endTime: snapTimeToSlot(draft.endTime),
+  };
+
+  const coachConflicts: Course[] = [];
+  const laneConflicts: Course[] = [];
+  const studentConflicts: { course: Course; students: string[] }[] = [];
+
   for (const existing of otherCourses) {
-    if (!timesOverlap(draft.startTime, draft.endTime, existing.startTime, existing.endTime)) {
+    if (!timesOverlapWithBuffer(
+      normalizedDraft.startTime,
+      normalizedDraft.endTime,
+      existing.startTime,
+      existing.endTime
+    )) {
       continue;
     }
 
-    if (existing.coachId === draft.coachId) {
-      conflicts.push({
-        type: 'coach',
-        message: `教练在 ${existing.startTime}-${existing.endTime} 已有课程：${existing.title}`,
-        conflictingCourseId: existing.id,
-        suggestion: findAlternativeSlot(existing, draft, allCourses),
-      });
+    if (existing.coachId === normalizedDraft.coachId) {
+      coachConflicts.push(existing);
     }
 
-    if (existing.lane === draft.lane) {
-      conflicts.push({
-        type: 'lane',
-        message: `第 ${existing.lane} 泳道在 ${existing.startTime}-${existing.endTime} 已被占用：${existing.title}`,
-        conflictingCourseId: existing.id,
-        suggestion: findAlternativeLane(existing, draft, allCourses),
-      });
+    if (existing.lane === normalizedDraft.lane) {
+      laneConflicts.push(existing);
     }
 
-    const overlappingStudents = existing.studentIds.filter((s) => draft.studentIds.includes(s));
+    const overlappingStudents = existing.studentIds.filter((s) =>
+      normalizedDraft.studentIds.includes(s)
+    );
     if (overlappingStudents.length > 0) {
-      conflicts.push({
-        type: 'student',
-        message: `学员时间冲突：${overlappingStudents.length} 名学员在 ${existing.startTime}-${existing.endTime} 已有课程`,
-        conflictingCourseId: existing.id,
-      });
+      studentConflicts.push({ course: existing, students: overlappingStudents });
     }
+  }
+
+  if (coachConflicts.length > 0) {
+    const firstConflict = coachConflicts[0];
+    const timeSlots = getAvailableTimeSlots(normalizedDraft, allCourses, coaches, 3);
+    const altCoaches = getAvailableCoaches(normalizedDraft, allCourses, coaches, 3);
+    const altLanes = getAvailableLanes(normalizedDraft, allCourses, 3);
+
+    conflicts.push({
+      type: 'coach',
+      message: `教练时间冲突：${coachConflicts.length} 节课重叠（含前后${BUFFER_MINUTES}分钟缓冲）。冲突课程：${coachConflicts.map((c) => `${c.startTime}-${c.endTime} ${c.title}`).join('、')}`,
+      conflictingCourseId: firstConflict.id,
+      conflictingCourseTitle: firstConflict.title,
+      suggestion: timeSlots.length > 0 ? {
+        date: timeSlots[0].date,
+        startTime: timeSlots[0].startTime,
+        lane: altLanes.length > 0 ? altLanes[0] : undefined,
+        coachId: altCoaches.length > 0 ? altCoaches[0].id : undefined,
+        coachName: altCoaches.length > 0 ? altCoaches[0].name : undefined,
+      } : undefined,
+      suggestedTimeSlots: timeSlots,
+      suggestedCoaches: altCoaches,
+      suggestedLanes: altLanes,
+    });
+  }
+
+  if (laneConflicts.length > 0) {
+    const firstConflict = laneConflicts[0];
+    const timeSlots = getAvailableTimeSlots(normalizedDraft, allCourses, coaches, 3);
+    const altCoaches = getAvailableCoaches(normalizedDraft, allCourses, coaches, 3);
+    const altLanes = getAvailableLanes(normalizedDraft, allCourses, 3);
+
+    conflicts.push({
+      type: 'lane',
+      message: `泳道占用冲突：第 ${normalizedDraft.lane} 泳道在 ${firstConflict.startTime}-${firstConflict.endTime} 已被「${firstConflict.title}」占用（含前后${BUFFER_MINUTES}分钟缓冲）`,
+      conflictingCourseId: firstConflict.id,
+      conflictingCourseTitle: firstConflict.title,
+      suggestion: altLanes.length > 0 ? {
+        lane: altLanes[0],
+        date: timeSlots.length > 0 ? timeSlots[0].date : undefined,
+        startTime: timeSlots.length > 0 ? timeSlots[0].startTime : undefined,
+      } : undefined,
+      suggestedTimeSlots: timeSlots,
+      suggestedCoaches: altCoaches,
+      suggestedLanes: altLanes,
+    });
+  }
+
+  if (studentConflicts.length > 0) {
+    const firstConflict = studentConflicts[0];
+    const timeSlots = getAvailableTimeSlots(normalizedDraft, allCourses, coaches, 3);
+    const altCoaches = getAvailableCoaches(normalizedDraft, allCourses, coaches, 3);
+    const altLanes = getAvailableLanes(normalizedDraft, allCourses, 3);
+
+    const allOverlappingStudentIds = new Set<string>();
+    studentConflicts.forEach((sc) =>
+      sc.students.forEach((s) => allOverlappingStudentIds.add(s))
+    );
+
+    conflicts.push({
+      type: 'student',
+      message: `学员时间冲突：${allOverlappingStudentIds.size} 名学员在 ${firstConflict.course.startTime}-${firstConflict.course.endTime} 已有课程「${firstConflict.course.title}」（含前后${BUFFER_MINUTES}分钟缓冲）`,
+      conflictingCourseId: firstConflict.course.id,
+      conflictingCourseTitle: firstConflict.course.title,
+      suggestion: timeSlots.length > 0 ? {
+        date: timeSlots[0].date,
+        startTime: timeSlots[0].startTime,
+        lane: altLanes.length > 0 ? altLanes[0] : undefined,
+      } : undefined,
+      suggestedTimeSlots: timeSlots,
+      suggestedCoaches: altCoaches,
+      suggestedLanes: altLanes,
+    });
   }
 
   return conflicts;
 }
 
-function findAlternativeSlot(
-  conflicting: Course,
+export function quickCheckConflict(
   draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
   allCourses: Course[]
-): { date?: string; startTime?: string; lane?: number } | undefined {
-  const duration = calculateDurationMinutes(draft.startTime, draft.endTime);
-  const slots = getTimeSlots();
+): { hasConflict: boolean; reason?: string } {
+  const normalizedDraft = {
+    ...draft,
+    startTime: snapTimeToSlot(draft.startTime),
+    endTime: snapTimeToSlot(draft.endTime),
+  };
 
-  for (let i = 0; i < slots.length; i++) {
-    const candidateStart = slots[i];
-    const candidateEnd = minutesToTime(timeToMinutes(candidateStart) + duration);
-    if (timeToMinutes(candidateEnd) > DAY_END_HOUR * 60) continue;
+  const otherCourses = allCourses.filter(
+    (c) =>
+      c.id !== draft.id &&
+      c.date === draft.date &&
+      c.branchId === draft.branchId &&
+      c.status !== 'cancelled'
+  );
 
-    const hasConflict = allCourses.some(
-      (c) =>
-        c.id !== draft.id &&
-        c.date === draft.date &&
-        c.coachId === draft.coachId &&
-        c.status !== 'cancelled' &&
-        timesOverlap(candidateStart, candidateEnd, c.startTime, c.endTime)
+  for (const existing of otherCourses) {
+    if (!timesOverlapWithBuffer(
+      normalizedDraft.startTime,
+      normalizedDraft.endTime,
+      existing.startTime,
+      existing.endTime
+    )) {
+      continue;
+    }
+
+    if (existing.coachId === normalizedDraft.coachId) {
+      return {
+        hasConflict: true,
+        reason: `教练在 ${existing.startTime}-${existing.endTime} 已有课程：${existing.title}`,
+      };
+    }
+
+    if (existing.lane === normalizedDraft.lane) {
+      return {
+        hasConflict: true,
+        reason: `第 ${existing.lane} 泳道已被「${existing.title}」占用`,
+      };
+    }
+
+    const overlappingStudents = existing.studentIds.filter((s) =>
+      normalizedDraft.studentIds.includes(s)
     );
-
-    if (!hasConflict) {
-      return { date: draft.date, startTime: candidateStart };
+    if (overlappingStudents.length > 0) {
+      return {
+        hasConflict: true,
+        reason: `${overlappingStudents.length} 名学员有时间冲突`,
+      };
     }
   }
-  return undefined;
-}
 
-function findAlternativeLane(
-  conflicting: Course,
-  draft: Omit<Course, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
-  allCourses: Course[]
-): { date?: string; startTime?: string; lane?: number } | undefined {
-  for (let lane = 1; lane <= 8; lane++) {
-    if (lane === draft.lane) continue;
-    const hasConflict = allCourses.some(
-      (c) =>
-        c.id !== draft.id &&
-        c.date === draft.date &&
-        c.lane === lane &&
-        c.branchId === draft.branchId &&
-        c.status !== 'cancelled' &&
-        timesOverlap(draft.startTime, draft.endTime, c.startTime, c.endTime)
-    );
-    if (!hasConflict) {
-      return { lane };
-    }
-  }
-  return undefined;
+  return { hasConflict: false };
 }
 
 export function getNextLevel(current: SkillLevel): SkillLevel | null {

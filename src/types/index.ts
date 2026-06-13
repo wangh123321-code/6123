@@ -82,15 +82,50 @@ export interface CourseDraft extends Omit<Course, 'id' | 'createdAt' | 'updatedA
   status?: Course['status'];
 }
 
+export interface TimeSlotSuggestion {
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
 export interface ConflictInfo {
   type: 'coach' | 'lane' | 'student';
   message: string;
   conflictingCourseId?: string;
+  conflictingCourseTitle?: string;
   suggestion?: {
     date?: string;
     startTime?: string;
     lane?: number;
+    coachId?: string;
+    coachName?: string;
   };
+  suggestedTimeSlots?: TimeSlotSuggestion[];
+  suggestedCoaches?: { id: string; name: string; color: string }[];
+  suggestedLanes?: number[];
+}
+
+export interface OperationLog {
+  id: string;
+  type: 'create' | 'update' | 'delete' | 'batch_create';
+  entityType: 'course';
+  timestamp: string;
+  description: string;
+  beforeState: Course | Course[] | null;
+  afterState: Course | Course[] | null;
+}
+
+export interface BatchScheduleConfig {
+  coachIds: string[];
+  studentIds: string[];
+  totalSessions: number;
+  startDate: string;
+  endDate: string;
+  title: string;
+  level: SkillLevel;
+  durationMinutes: number;
+  preferredStartTime?: string;
+  avoidWeekends?: boolean;
 }
 
 export interface CoachDailyStats {
@@ -142,6 +177,9 @@ export const DAY_START_HOUR = 8;
 export const DAY_END_HOUR = 22;
 export const TIME_SLOT_MINUTES = 30;
 export const MAX_DAILY_HOURS = 8;
+export const BUFFER_MINUTES = 15;
+export const MAX_CONSECUTIVE_COURSES = 4;
+export const MAX_DAILY_STUDENT_COURSES = 1;
 
 export const SKILL_LEVELS: SkillLevelConfig[] = [
   {
