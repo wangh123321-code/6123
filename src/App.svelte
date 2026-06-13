@@ -25,6 +25,7 @@
   let conflictList: ConflictInfo[] = [];
   let conflictDraft: CourseDraft | null = null;
   let editingCourse: Course | null = null;
+  let creatingDraft: CourseDraft | null = null;
   let showCourseModal = false;
   let initialized = false;
 
@@ -59,12 +60,20 @@
 
   function handleEditCourse(course: Course) {
     editingCourse = course;
+    creatingDraft = null;
+    showCourseModal = true;
+  }
+
+  function handleCreateCourse(draft: CourseDraft | null) {
+    editingCourse = null;
+    creatingDraft = draft;
     showCourseModal = true;
   }
 
   function closeCourseModal() {
     showCourseModal = false;
     editingCourse = null;
+    creatingDraft = null;
   }
 </script>
 
@@ -91,9 +100,9 @@
           courses={$visibleCourses}
           coaches={$visibleCoaches}
           {hoverCell}
-          draggingFrom={null}
           onConflict={handleConflict}
           onEditCourse={handleEditCourse}
+          onCreateCourse={handleCreateCourse}
         />
       {:else if $viewMode === 'students'}
         <StudentPanel students={$visibleStudents} />
@@ -119,6 +128,7 @@
     {#if showCourseModal}
       <CourseModal
         course={editingCourse}
+        draft={creatingDraft}
         branchId={$selectedBranchId}
         onClose={closeCourseModal}
         onConflict={handleConflict}

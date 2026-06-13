@@ -248,20 +248,42 @@
   }
 
   .branch-selector select {
-    padding: 4px 8px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 5px 28px 5px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: var(--radius-sm);
     font-size: 12px;
-    background: rgba(255, 255, 255, 0.08);
+    font-weight: 500;
+    background: linear-gradient(180deg, var(--ocean-700), #13274a);
     color: var(--text-inverse);
-    max-width: 160px;
+    max-width: 180px;
     transition: all 0.2s var(--ease-out);
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 12px 12px;
+  }
+
+  .branch-selector select option {
+    background: var(--ocean-800);
+    color: var(--text-inverse);
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 500;
   }
 
   .branch-selector select:focus {
     outline: none;
     border-color: var(--teal-500);
-    background: rgba(255, 255, 255, 0.12);
+    background-color: var(--ocean-700);
+    box-shadow: 0 0 0 3px rgba(0, 191, 165, 0.2);
+  }
+
+  .branch-selector select:hover {
+    border-color: rgba(255, 255, 255, 0.3);
   }
 
   .action-btns {

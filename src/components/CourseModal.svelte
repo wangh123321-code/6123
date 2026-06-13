@@ -6,6 +6,7 @@
   import { saveCourse, deleteCourse, checkCourseConflicts, visibleStudents, visibleCoaches } from '../lib/stores';
 
   export let course: Course | null;
+  export let draft: CourseDraft | null = null;
   export let branchId: string;
   export let onClose: () => void;
   export let onConflict: (conflicts: any[], draft: CourseDraft) => void;
@@ -38,6 +39,16 @@
     endTime = course.endTime;
     studentIds = [...course.studentIds];
     notes = course.notes || '';
+  } else if (draft) {
+    title = draft.title;
+    level = draft.level;
+    coachId = draft.coachId || coaches[0]?.id || '';
+    lane = draft.lane;
+    date = draft.date;
+    startTime = draft.startTime;
+    endTime = draft.endTime;
+    studentIds = draft.studentIds ? [...draft.studentIds] : [];
+    notes = '';
   } else {
     title = '';
     level = 'breaststroke_beginner';

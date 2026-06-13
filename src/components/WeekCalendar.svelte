@@ -23,6 +23,7 @@
   export let coaches: Coach[];
   export let onConflict: (conflicts: ConflictInfo[], draft: CourseDraft) => void;
   export let onEditCourse: (course: Course) => void;
+  export let onCreateCourse: (draft: CourseDraft | null) => void;
 
   export let hoverCell: { date: string; time: string; lane: number } | null = null;
 
@@ -32,6 +33,28 @@
 
   const coachColorMap = new Map(coaches.map((c) => [c.id, c.color]));
   const coachNameMap = new Map(coaches.map((c) => [c.id, c.name]));
+
+  function openNewCourseModal() {
+    onCreateCourse(null);
+  }
+
+  function openQuickAdd(date: string, time: string, lane: number) {
+    const endMinutes = timeToMinutes(time) + 60;
+    const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+    const draft: CourseDraft = {
+      title: '新课程',
+      level: 'breaststroke_beginner',
+      branchId: get(selectedBranchId),
+      coachId: coaches.length > 0 ? coaches[0].id : '',
+      lane,
+      startTime: time,
+      endTime,
+      date,
+      studentIds: [],
+      skillPointsCovered: [],
+    };
+    onCreateCourse(draft);
+  }
 
   function getCellPosition(course: Course) {
     const dayIdx = weekDates.indexOf(course.date);
@@ -186,69 +209,85 @@
       </button>
       <span class="week-range">{weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}</span>
     </div>
+    {#if hasPermission($currentUser!.role, 'create_course')}
+      <button class="add-course-btn" on:click={openNewCourseModal}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        新建课程
+      </button>
+    {/if}
   </div>
 
   <div class="calendar-body">
-    <div class="time-column">
-      <div class="corner-cell">
-        <div class="lanes-row">
-          {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
-            <div class="lane-label" role="columnheader">{lane}道</div>
-          {/each}
-        </div>
-      </div>
-      {#each timeSlots as time}
-        <div class="time-label" role="rowheader">{time}</div>
-      {/each}
-    </div>
-
-    <div class="days-container" role="rowgroup">
-      {#each weekDates as date, dayIdx}
-        <div class="day-column {isToday(date) ? 'today' : ''}" role="gridcell">
-          <div class="day-header" role="columnheader">
-            <div class="day-name">{getDayName(date)}</div>
-            <div class="day-date">{date.slice(5)}</div>
-          </div>
-          <div class="lanes-header-inner">
+    <div class="scroll-wrapper">
+      <div class="time-column">
+        <div class="corner-cell">
+          <div class="lanes-row">
             {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
-              <div class="lane-label-inner" role="columnheader">{lane}</div>
-            {/each}
-          </div>
-          <div class="day-slots" role="grid">
-            {#each timeSlots as time}
-              <div class="slot-row" role="row">
-                {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
-                  <div
-                    class="time-cell {hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane ? 'hovered' : ''}"
-                    role="gridcell"
-                    data-date={date}
-                    data-time={time}
-                    data-lane={lane}
-                  ></div>
-                {/each}
-              </div>
-            {/each}
-
-            {#each courses.filter((c) => weekDates.includes(c.date)) as course}
-              {@const pos = getCellPosition(course)}
-              {#if pos && pos.dayIdx === dayIdx}
-                <div
-                  class="course-block {course.status}"
-                  style="top:{pos.topPx}px;height:{pos.heightPx}px;left:{((course.lane - 1) / laneCount) * 100}%;width:{(1 / laneCount) * 100 - 1}%;background-color:{coachColorMap.get(course.coachId) || 'var(--ocean-600)'};"
-                  draggable={hasPermission($currentUser!.role, 'edit_course')}
-                  on:dragstart={(e) => handleCourseDragStart(e, course)}
-                  on:click={() => handleCourseClick(course)}
-                >
-                  <div class="course-time">{course.startTime}-{course.endTime}</div>
-                  <div class="course-title">{course.title}</div>
-                  <div class="course-coach">{coachNameMap.get(course.coachId) || '未分配'}</div>
-                  <div class="course-students">{course.studentIds.length}人</div>
-                </div>
-              {/if}
+              <div class="lane-label" role="columnheader">{lane}道</div>
             {/each}
           </div>
         </div>
-      {/each}
+        {#each timeSlots as time}
+          <div class="time-label" role="rowheader">{time}</div>
+        {/each}
+      </div>
+
+      <div class="days-container" role="rowgroup">
+        {#each weekDates as date, dayIdx}
+          <div class="day-column {isToday(date) ? 'today' : ''}" role="gridcell">
+            <div class="day-header" role="columnheader">
+              <div class="day-name">{getDayName(date)}</div>
+              <div class="day-date">{date.slice(5)}</div>
+            </div>
+            <div class="lanes-header-inner">
+              {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
+                <div class="lane-label-inner" role="columnheader">{lane}</div>
+              {/each}
+            </div>
+            <div class="day-slots" role="grid">
+              {#each timeSlots as time}
+                <div class="slot-row" role="row">
+                  {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
+                    <div
+                      class="time-cell {hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane ? 'hovered' : ''}"
+                      role="gridcell"
+                      data-date={date}
+                      data-time={time}
+                      data-lane={lane}
+                      on:click|stopPropagation={() => hasPermission($currentUser!.role, 'create_course') && openQuickAdd(date, time, lane)}
+                    >
+                      {#if hasPermission($currentUser!.role, 'create_course')}
+                        <div class="cell-plus">+</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/each}
+
+              {#each courses.filter((c) => weekDates.includes(c.date)) as course}
+                {@const pos = getCellPosition(course)}
+                {#if pos && pos.dayIdx === dayIdx}
+                  <div
+                    class="course-block {course.status} {pos.heightPx < 60 ? 'compact' : ''}"
+                    style="top:{pos.topPx}px;height:{pos.heightPx}px;left:{((course.lane - 1) / laneCount) * 100}%;width:{(1 / laneCount) * 100 - 0.6}%;background-color:{coachColorMap.get(course.coachId) || 'var(--ocean-600)'};"
+                    draggable={hasPermission($currentUser!.role, 'edit_course')}
+                    on:dragstart={(e) => handleCourseDragStart(e, course)}
+                    on:click={() => handleCourseClick(course)}
+                    title="{course.startTime}-{course.endTime} {course.title} {coachNameMap.get(course.coachId) || ''} {course.studentIds.length}人"
+                  >
+                    <div class="course-time">{course.startTime}-{course.endTime}</div>
+                    <div class="course-title">{course.title}</div>
+                    <div class="course-extra">
+                      <span class="course-coach">{coachNameMap.get(course.coachId) || '未分配'}</span>
+                      <span class="course-students">{course.studentIds.length}人</span>
+                    </div>
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
     </div>
   </div>
 </div>
@@ -329,11 +368,64 @@
     letter-spacing: 0.02em;
   }
 
+  .add-course-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0 18px;
+    border: none;
+    background: linear-gradient(135deg, var(--teal-500), var(--teal-600));
+    color: white;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 700;
+    font-family: var(--font-body);
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(0, 191, 165, 0.3), 0 1px 2px rgba(0, 191, 165, 0.2);
+    transition: all 0.25s var(--ease-spring);
+  }
+
+  .add-course-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 191, 165, 0.4), 0 2px 4px rgba(0, 191, 165, 0.25);
+    filter: brightness(1.08);
+  }
+
+  .add-course-btn:active {
+    transform: translateY(0);
+  }
+
   .calendar-body {
     flex: 1;
     display: flex;
-    overflow: auto;
+    flex-direction: column;
+    overflow: hidden;
     position: relative;
+  }
+
+  .scroll-wrapper {
+    flex: 1;
+    display: flex;
+    overflow: auto;
+  }
+
+  .scroll-wrapper::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .scroll-wrapper::-webkit-scrollbar-track {
+    background: var(--surface-50);
+  }
+
+  .scroll-wrapper::-webkit-scrollbar-thumb {
+    background: var(--surface-200);
+    border-radius: 5px;
+  }
+
+  .scroll-wrapper::-webkit-scrollbar-thumb:hover {
+    background: var(--teal-300);
   }
 
   .time-column {
@@ -351,6 +443,10 @@
     border-bottom: 1px solid var(--surface-100);
     display: flex;
     align-items: flex-end;
+    position: sticky;
+    top: 0;
+    background: var(--surface-0);
+    z-index: 6;
   }
 
   .lanes-row {
@@ -362,6 +458,7 @@
 
   .lane-label {
     flex: 1;
+    min-width: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -392,7 +489,7 @@
 
   .day-column {
     flex: 1;
-    min-width: 148px;
+    min-width: 360px;
     border-right: 1px solid var(--surface-100);
     position: relative;
   }
@@ -451,10 +548,18 @@
     height: 24px;
     border-bottom: 1px solid var(--surface-100);
     background: var(--surface-50);
+    position: sticky;
+    top: 60px;
+    z-index: 3;
+  }
+
+  .day-column.today .lanes-header-inner {
+    top: 63px;
   }
 
   .lane-label-inner {
     flex: 1;
+    min-width: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -479,19 +584,47 @@
 
   .time-cell {
     flex: 1;
+    min-width: 40px;
     border-right: 1px solid var(--surface-50);
     border-bottom: 1px solid var(--surface-50);
     transition: background 0.2s var(--ease-out);
+    position: relative;
+    cursor: pointer;
+    overflow: hidden;
   }
 
   .time-cell:hover {
     background: rgba(0, 191, 165, 0.04);
   }
 
+  .cell-plus {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    opacity: 0;
+    font-size: 20px;
+    font-weight: 300;
+    pointer-events: none;
+    transition: all 0.15s var(--ease-out);
+  }
+
+  .time-cell:hover .cell-plus {
+    opacity: 0.4;
+    color: var(--teal-500);
+    font-size: 22px;
+  }
+
   .time-cell.hovered {
     background: rgba(0, 191, 165, 0.12);
     box-shadow: inset 0 0 0 2px var(--teal-500);
     animation: pulse-glow 1.2s ease-in-out infinite;
+  }
+
+  .time-cell.hovered .cell-plus {
+    opacity: 0;
   }
 
   @keyframes pulse-glow {
@@ -502,36 +635,44 @@
   .course-block {
     position: absolute;
     border-radius: var(--radius-sm);
-    padding: 4px 7px;
+    padding: 5px 7px;
     color: white;
     font-size: 11px;
     cursor: pointer;
     overflow: hidden;
-    box-shadow: var(--shadow-sm);
-    transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-out);
+    box-shadow: var(--shadow-sm), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-out), filter 0.2s ease-out;
     z-index: 2;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
   }
 
   .course-block:hover {
-    transform: scale(1.04) translateY(-1px);
-    box-shadow: var(--shadow-lg);
+    transform: scale(1.03) translateY(-1px);
+    box-shadow: var(--shadow-lg), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+    filter: brightness(1.08);
     z-index: 10;
   }
 
   .course-block.completed {
     opacity: 0.6;
+    filter: saturate(0.5);
   }
 
   .course-block.cancelled {
     opacity: 0.35;
     text-decoration: line-through;
+    filter: grayscale(0.4);
   }
 
   .course-time {
     font-weight: 700;
     font-size: 10px;
-    opacity: 0.9;
+    opacity: 0.95;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
   }
 
   .course-title {
@@ -540,15 +681,51 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-family: var(--font-display);
+    line-height: 1.2;
+    font-size: 11.5px;
+    flex-shrink: 0;
+  }
+
+  .course-extra {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.9;
+    margin-top: auto;
+    line-height: 1.2;
   }
 
   .course-coach {
-    opacity: 0.85;
-    font-size: 10px;
+    font-size: 9.5px;
+    opacity: 0.9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 70%;
   }
 
   .course-students {
-    opacity: 0.75;
-    font-size: 10px;
+    font-size: 9.5px;
+    font-weight: 700;
+    opacity: 0.95;
+    flex-shrink: 0;
+    padding: 1px 4px;
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    line-height: 1.4;
+  }
+
+  .course-block.compact {
+    padding: 3px 5px;
+    gap: 0;
+  }
+
+  .course-block.compact .course-extra {
+    display: none;
+  }
+
+  .course-block.compact .course-title {
+    font-size: 10.5px;
   }
 </style>
