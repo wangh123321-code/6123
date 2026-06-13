@@ -1,0 +1,554 @@
+<script lang="ts">
+  import { get } from 'svelte/store';
+  import type { Course, Coach, ConflictInfo, CourseDraft } from '../types';
+  import { LANE_COUNT, DAY_START_HOUR, DAY_END_HOUR, TIME_SLOT_MINUTES } from '../types';
+  import {
+    getWeekDateStrings,
+    getTimeSlots,
+    getDayName,
+    isToday,
+    timeToMinutes,
+    calculateDurationMinutes,
+  } from '../lib/utils';
+  import {
+    selectedDate,
+    selectedBranchId,
+    checkCourseConflicts,
+    saveCourse,
+    currentUser,
+    hasPermission,
+  } from '../lib/stores';
+
+  export let courses: Course[];
+  export let coaches: Coach[];
+  export let onConflict: (conflicts: ConflictInfo[], draft: CourseDraft) => void;
+  export let onEditCourse: (course: Course) => void;
+
+  export let hoverCell: { date: string; time: string; lane: number } | null = null;
+
+  $: weekDates = getWeekDateStrings($selectedDate);
+  $: timeSlots = getTimeSlots();
+  $: laneCount = LANE_COUNT;
+
+  const coachColorMap = new Map(coaches.map((c) => [c.id, c.color]));
+  const coachNameMap = new Map(coaches.map((c) => [c.id, c.name]));
+
+  function getCellPosition(course: Course) {
+    const dayIdx = weekDates.indexOf(course.date);
+    if (dayIdx < 0) return null;
+    const startMin = timeToMinutes(course.startTime);
+    const slotStartMin = DAY_START_HOUR * 60;
+    const topPx = ((startMin - slotStartMin) / TIME_SLOT_MINUTES) * 40;
+    const duration = calculateDurationMinutes(course.startTime, course.endTime);
+    const heightPx = (duration / TIME_SLOT_MINUTES) * 40 - 4;
+    return { dayIdx, topPx, heightPx };
+  }
+
+  function cellFromEvent(event: DragEvent): { date: string; time: string; lane: number } | null {
+    const target = event.target as HTMLElement;
+    const cell = target.closest('.time-cell') as HTMLElement | null;
+    if (!cell) return null;
+    const date = cell.dataset.date;
+    const time = cell.dataset.time;
+    const lane = parseInt(cell.dataset.lane || '0');
+    if (!date || !time || !lane) return null;
+    return { date, time, lane };
+  }
+
+  function handleDragOver(event: DragEvent) {
+    event.preventDefault();
+    if (!hasPermission(get(currentUser)!.role, 'create_course')) return;
+    const cell = cellFromEvent(event);
+    if (cell) {
+      hoverCell = cell;
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'copy';
+      }
+    }
+  }
+
+  function handleDragLeave() {
+    hoverCell = null;
+  }
+
+  async function handleDrop(event: DragEvent) {
+    event.preventDefault();
+    hoverCell = null;
+    if (!hasPermission(get(currentUser)!.role, 'create_course')) return;
+
+    const cell = cellFromEvent(event);
+    if (!cell || !event.dataTransfer) return;
+
+    let payload;
+    try {
+      payload = JSON.parse(event.dataTransfer.getData('application/json'));
+    } catch {
+      return;
+    }
+
+    if (payload.type === 'coach') {
+      const coach = coaches.find((c) => c.id === payload.coachId);
+      if (!coach) return;
+
+      const endMinutes = timeToMinutes(cell.time) + 60;
+      const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+
+      const draft: CourseDraft = {
+        title: `${coach.name}的课`,
+        level: 'breaststroke_beginner',
+        branchId: get(selectedBranchId),
+        coachId: coach.id,
+        lane: cell.lane,
+        startTime: cell.time,
+        endTime,
+        date: cell.date,
+        studentIds: [],
+        skillPointsCovered: [],
+      };
+
+      const conflicts = checkCourseConflicts(draft);
+      if (conflicts.length > 0) {
+        onConflict(conflicts, draft);
+        return;
+      }
+
+      const saved = await saveCourse(draft);
+      if (!saved) {
+        onConflict(checkCourseConflicts(draft), draft);
+      }
+    } else if (payload.type === 'course') {
+      const existingCourse = courses.find((c) => c.id === payload.courseId);
+      if (!existingCourse) return;
+
+      const draft: CourseDraft = {
+        ...existingCourse,
+        id: existingCourse.id,
+        lane: cell.lane,
+        startTime: cell.time,
+        date: cell.date,
+      };
+
+      const conflicts = checkCourseConflicts(draft);
+      if (conflicts.length > 0) {
+        onConflict(conflicts, draft);
+        return;
+      }
+
+      await saveCourse(draft);
+    }
+  }
+
+  function handleCourseDragStart(event: DragEvent, course: Course) {
+    if (!hasPermission(get(currentUser)!.role, 'edit_course')) {
+      event.preventDefault();
+      return;
+    }
+    event.stopPropagation();
+    if (event.dataTransfer) {
+      event.dataTransfer.setData(
+        'application/json',
+        JSON.stringify({ type: 'course', courseId: course.id })
+      );
+      event.dataTransfer.effectAllowed = 'move';
+    }
+  }
+
+  function handleCourseClick(course: Course) {
+    onEditCourse(course);
+  }
+
+  function prevWeek() {
+    const d = new Date($selectedDate);
+    d.setDate(d.getDate() - 7);
+    $selectedDate = d;
+  }
+
+  function nextWeek() {
+    const d = new Date($selectedDate);
+    d.setDate(d.getDate() + 7);
+    $selectedDate = d;
+  }
+
+  function today() {
+    $selectedDate = new Date();
+  }
+</script>
+
+<div class="week-calendar" role="grid" on:dragover={handleDragOver} on:dragleave={handleDragLeave} on:drop={handleDrop}>
+  <div class="calendar-header">
+    <div class="nav-controls">
+      <button class="nav-btn" on:click={prevWeek} aria-label="上一周">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3L5 8L10 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button class="today-btn" on:click={today}>今天</button>
+      <button class="nav-btn" on:click={nextWeek} aria-label="下一周">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M6 3L11 8L6 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="week-range">{weekDates[0].slice(5)} ~ {weekDates[6].slice(5)}</span>
+    </div>
+  </div>
+
+  <div class="calendar-body">
+    <div class="time-column">
+      <div class="corner-cell">
+        <div class="lanes-row">
+          {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
+            <div class="lane-label" role="columnheader">{lane}道</div>
+          {/each}
+        </div>
+      </div>
+      {#each timeSlots as time}
+        <div class="time-label" role="rowheader">{time}</div>
+      {/each}
+    </div>
+
+    <div class="days-container" role="rowgroup">
+      {#each weekDates as date, dayIdx}
+        <div class="day-column {isToday(date) ? 'today' : ''}" role="gridcell">
+          <div class="day-header" role="columnheader">
+            <div class="day-name">{getDayName(date)}</div>
+            <div class="day-date">{date.slice(5)}</div>
+          </div>
+          <div class="lanes-header-inner">
+            {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
+              <div class="lane-label-inner" role="columnheader">{lane}</div>
+            {/each}
+          </div>
+          <div class="day-slots" role="grid">
+            {#each timeSlots as time}
+              <div class="slot-row" role="row">
+                {#each Array.from({ length: laneCount }, (_, i) => i + 1) as lane}
+                  <div
+                    class="time-cell {hoverCell && hoverCell.date === date && hoverCell.time === time && hoverCell.lane === lane ? 'hovered' : ''}"
+                    role="gridcell"
+                    data-date={date}
+                    data-time={time}
+                    data-lane={lane}
+                  ></div>
+                {/each}
+              </div>
+            {/each}
+
+            {#each courses.filter((c) => weekDates.includes(c.date)) as course}
+              {@const pos = getCellPosition(course)}
+              {#if pos && pos.dayIdx === dayIdx}
+                <div
+                  class="course-block {course.status}"
+                  style="top:{pos.topPx}px;height:{pos.heightPx}px;left:{((course.lane - 1) / laneCount) * 100}%;width:{(1 / laneCount) * 100 - 1}%;background-color:{coachColorMap.get(course.coachId) || 'var(--ocean-600)'};"
+                  draggable={hasPermission($currentUser!.role, 'edit_course')}
+                  on:dragstart={(e) => handleCourseDragStart(e, course)}
+                  on:click={() => handleCourseClick(course)}
+                >
+                  <div class="course-time">{course.startTime}-{course.endTime}</div>
+                  <div class="course-title">{course.title}</div>
+                  <div class="course-coach">{coachNameMap.get(course.coachId) || '未分配'}</div>
+                  <div class="course-students">{course.studentIds.length}人</div>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
+</div>
+
+<style>
+  .week-calendar {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-0);
+    overflow: hidden;
+    font-family: var(--font-body);
+  }
+
+  .calendar-header {
+    padding: 14px 20px;
+    background: var(--surface-0);
+    border-bottom: 1px solid var(--surface-100);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: var(--shadow-xs);
+    z-index: 10;
+  }
+
+  .nav-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .nav-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--surface-200);
+    background: var(--surface-0);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all 0.2s var(--ease-out);
+  }
+
+  .nav-btn:hover {
+    background: var(--teal-50);
+    border-color: var(--teal-300);
+    color: var(--teal-500);
+    box-shadow: var(--shadow-xs);
+  }
+
+  .today-btn {
+    height: 36px;
+    padding: 0 18px;
+    border: 1px solid var(--teal-300);
+    background: var(--teal-50);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--teal-500);
+    font-family: var(--font-body);
+    transition: all 0.2s var(--ease-out);
+  }
+
+  .today-btn:hover {
+    background: var(--teal-100);
+    box-shadow: var(--shadow-xs);
+  }
+
+  .week-range {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-left: 12px;
+    font-family: var(--font-display);
+    letter-spacing: 0.02em;
+  }
+
+  .calendar-body {
+    flex: 1;
+    display: flex;
+    overflow: auto;
+    position: relative;
+  }
+
+  .time-column {
+    flex-shrink: 0;
+    width: 64px;
+    background: var(--surface-0);
+    border-right: 1px solid var(--surface-100);
+    position: sticky;
+    left: 0;
+    z-index: 5;
+  }
+
+  .corner-cell {
+    height: 84px;
+    border-bottom: 1px solid var(--surface-100);
+    display: flex;
+    align-items: flex-end;
+  }
+
+  .lanes-row {
+    display: flex;
+    width: 100%;
+    height: 24px;
+    border-top: 1px solid var(--surface-100);
+  }
+
+  .lane-label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .time-label {
+    height: 40px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--surface-50);
+  }
+
+  .days-container {
+    flex: 1;
+    display: flex;
+    min-width: 0;
+  }
+
+  .day-column {
+    flex: 1;
+    min-width: 148px;
+    border-right: 1px solid var(--surface-100);
+    position: relative;
+  }
+
+  .day-column.today {
+    background: var(--teal-50);
+  }
+
+  .day-column.today .day-header {
+    background: var(--teal-500);
+    color: white;
+    border-bottom-color: var(--teal-400);
+  }
+
+  .day-column.today .day-name,
+  .day-column.today .day-date {
+    color: white;
+  }
+
+  .day-header {
+    height: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-bottom: 1px solid var(--surface-100);
+    background: var(--surface-0);
+    position: sticky;
+    top: 0;
+    z-index: 4;
+  }
+
+  .day-column.today .day-header {
+    border-top: 3px solid var(--teal-500);
+    height: 63px;
+  }
+
+  .day-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .day-date {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-top: 2px;
+    font-family: var(--font-display);
+  }
+
+  .lanes-header-inner {
+    display: flex;
+    height: 24px;
+    border-bottom: 1px solid var(--surface-100);
+    background: var(--surface-50);
+  }
+
+  .lane-label-inner {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    border-right: 1px solid var(--surface-100);
+  }
+
+  .lane-label-inner:last-child {
+    border-right: none;
+  }
+
+  .day-slots {
+    position: relative;
+  }
+
+  .slot-row {
+    display: flex;
+    height: 40px;
+  }
+
+  .time-cell {
+    flex: 1;
+    border-right: 1px solid var(--surface-50);
+    border-bottom: 1px solid var(--surface-50);
+    transition: background 0.2s var(--ease-out);
+  }
+
+  .time-cell:hover {
+    background: rgba(0, 191, 165, 0.04);
+  }
+
+  .time-cell.hovered {
+    background: rgba(0, 191, 165, 0.12);
+    box-shadow: inset 0 0 0 2px var(--teal-500);
+    animation: pulse-glow 1.2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: inset 0 0 0 2px var(--teal-500), inset 0 0 6px rgba(0, 191, 165, 0.15); }
+    50% { box-shadow: inset 0 0 0 2px var(--teal-400), inset 0 0 12px rgba(0, 191, 165, 0.3); }
+  }
+
+  .course-block {
+    position: absolute;
+    border-radius: var(--radius-sm);
+    padding: 4px 7px;
+    color: white;
+    font-size: 11px;
+    cursor: pointer;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-out);
+    z-index: 2;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .course-block:hover {
+    transform: scale(1.04) translateY(-1px);
+    box-shadow: var(--shadow-lg);
+    z-index: 10;
+  }
+
+  .course-block.completed {
+    opacity: 0.6;
+  }
+
+  .course-block.cancelled {
+    opacity: 0.35;
+    text-decoration: line-through;
+  }
+
+  .course-time {
+    font-weight: 700;
+    font-size: 10px;
+    opacity: 0.9;
+  }
+
+  .course-title {
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--font-display);
+  }
+
+  .course-coach {
+    opacity: 0.85;
+    font-size: 10px;
+  }
+
+  .course-students {
+    opacity: 0.75;
+    font-size: 10px;
+  }
+</style>
